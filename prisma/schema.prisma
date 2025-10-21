@@ -1,0 +1,66 @@
+generator client {
+  provider = "prisma-client-js"
+  // (opsional) Tentukan folder output client:
+  // output   = "./generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model users {
+  id         String   @id @default(uuid())
+  username   String?
+  password   String
+  email      String   @unique
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  orders     orders[]
+}
+
+model genres {
+  id         String    @id @default(uuid())
+  name       String    @unique
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+  deleted_at DateTime?
+  books      books[]
+}
+
+model books {
+  id               String        @id @default(uuid())
+  title            String        @unique
+  writer           String
+  publisher        String
+  publication_year Int
+  description      String?
+  price            Decimal       @db.Decimal(12, 2)
+  stock_quantity   Int
+  genre_id         String
+  genre            genres        @relation(fields: [genre_id], references: [id], onDelete: Restrict)
+  created_at       DateTime      @default(now())
+  updated_at       DateTime      @updatedAt
+  deleted_at       DateTime?
+  order_items      order_items[]
+}
+
+model orders {
+  id          String        @id @default(uuid())
+  user_id     String
+  user        users         @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  created_at  DateTime      @default(now())
+  updated_at  DateTime      @updatedAt
+  order_items order_items[]
+}
+
+model order_items {
+  id         String   @id @default(uuid())
+  quantity   Int
+  order_id   String
+  book_id    String
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+  order      orders   @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  book       books    @relation(fields: [book_id], references: [id], onDelete: Restrict)
+}

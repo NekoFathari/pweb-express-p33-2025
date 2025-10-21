@@ -1,0 +1,10 @@
+import { Router } from 'express';
+import * as c from '../controllers/genre.controller';
+import { authGuard } from '../middlewares/auth';
+const r = Router();
+r.post('/', authGuard, c.create);
+r.get('/', authGuard, c.list);
+r.get('/:id', authGuard, c.detail);
+r.patch('/:id', authGuard, c.update);
+r.delete('/:id', authGuard, c.remove);
+export default r;
