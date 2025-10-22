@@ -1,7 +1,13 @@
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
-import { sendResponse } from '../utils/response';
-import { AuthRequest } from '../middleware/auth';
+import { ok, fail } from '../utils/response';
+
+interface AuthRequest extends Request {
+  user: {
+    id: string;
+    [key: string]: any;
+  };
+}
 
 const prisma = new PrismaClient();
 
@@ -17,23 +23,25 @@ export const createTransaction = async (req: AuthRequest, res: Response) => {
 
     // Validation
     if (!items || !Array.isArray(items) || items.length === 0) {
-      return sendResponse(res, 400, false, 'Items are required and must be a non-empty array');
+      return res.status(400).json(fail('Items are required and must be a non-empty array'));
     }
 
     for (const item of items) {
       if (!item.bookId || !item.quantity || item.quantity < 1) {
-        return sendResponse(res, 400, false, 'Each item must have valid bookId and quantity (min 1)');
+        return res.status(400).json(fail('Each item must have valid bookId and quantity (min 1)'));
       }
     }
 
     // Database transaction
     const result = await prisma.$transaction(async (tx) => {
-      let totalAmount = 0;
-      const transactionDetails = [];
+      const orderItems = [];
 
       for (const item of items) {
-        const book = await tx.book.findUnique({
-          where: { id: item.bookId },
+        const book = await tx.books.findFirst({
+          where: { 
+            id: item.bookId,
+            deleted_at: null
+          },
           include: { genre: true }
         });
 
@@ -41,37 +49,32 @@ export const createTransaction = async (req: AuthRequest, res: Response) => {
           throw new Error(`BOOK_NOT_FOUND:${item.bookId}`);
         }
 
-        if (book.stock < item.quantity) {
-          throw new Error(`INSUFFICIENT_STOCK:${book.title}:${book.stock}:${item.quantity}`);
+        if (book.stock_quantity < item.quantity) {
+          throw new Error(`INSUFFICIENT_STOCK:${book.title}:${book.stock_quantity}:${item.quantity}`);
         }
 
         // Update stock
-        await tx.book.update({
+        await tx.books.update({
           where: { id: item.bookId },
-          data: { stock: { decrement: item.quantity } }
+          data: { stock_quantity: { decrement: item.quantity } }
         });
 
-        const itemTotal = book.price * item.quantity;
-        totalAmount += itemTotal;
-
-        transactionDetails.push({
-          bookId: item.bookId,
-          quantity: item.quantity,
-          priceAtPurchase: book.price
+        orderItems.push({
+          book_id: item.bookId,
+          quantity: item.quantity
         });
       }
 
-      // Create transaction
-      const transaction = await tx.transaction.create({
+      // Create order
+      const order = await tx.orders.create({
         data: {
-          userId,
-          totalAmount,
-          details: {
-            create: transactionDetails
+          user_id: userId,
+          order_items: {
+            create: orderItems
           }
         },
         include: {
-          details: {
+          order_items: {
             include: {
               book: {
                 include: {
@@ -79,29 +82,36 @@ export const createTransaction = async (req: AuthRequest, res: Response) => {
                 }
               }
             }
+          },
+          user: {
+            select: {
+              id: true,
+              name: true,
+              email: true
+            }
           }
         }
       });
 
-      return transaction;
+      return order;
     });
 
-    return sendResponse(res, 201, true, 'Transaction created successfully', result);
+    return res.status(201).json(ok('Transaction created successfully', result));
 
   } catch (error: any) {
     console.error('Transaction error:', error);
 
     if (error.message.startsWith('BOOK_NOT_FOUND')) {
       const bookId = error.message.split(':')[1];
-      return sendResponse(res, 404, false, `Book with ID ${bookId} not found`);
+      return res.status(404).json(fail(`Book with ID ${bookId} not found`));
     }
 
     if (error.message.startsWith('INSUFFICIENT_STOCK')) {
       const [, title, available, requested] = error.message.split(':');
-      return sendResponse(res, 400, false, `Insufficient stock for "${title}". Available: ${available}, Requested: ${requested}`);
+      return res.status(400).json(fail(`Insufficient stock for "${title}". Available: ${available}, Requested: ${requested}`));
     }
 
-    return sendResponse(res, 500, false, 'Internal server error');
+    return res.status(500).json(fail('Internal server error'));
   }
 };
 
@@ -111,7 +121,7 @@ export const getAllTransactions = async (req: AuthRequest, res: Response) => {
     const limit = parseInt(req.query.limit as string) || 10;
     const skip = (page - 1) * limit;
 
-    const transactions = await prisma.transaction.findMany({
+    const orders = await prisma.orders.findMany({
       skip,
       take: limit,
       include: {
@@ -122,7 +132,7 @@ export const getAllTransactions = async (req: AuthRequest, res: Response) => {
             email: true
           }
         },
-        details: {
+        order_items: {
           include: {
             book: {
               include: {
@@ -133,25 +143,25 @@ export const getAllTransactions = async (req: AuthRequest, res: Response) => {
         }
       },
       orderBy: {
-        createdAt: 'desc'
+        created_at: 'desc'
       }
     });
 
-    const total = await prisma.transaction.count();
+    const total = await prisma.orders.count();
 
-    return sendResponse(res, 200, true, 'Transactions retrieved successfully', {
-      transactions,
-      meta: {
+    return res.json(ok('Transactions retrieved successfully', {
+      orders,
+      pagination: {
         page,
         limit,
         total,
-        pages: Math.ceil(total / limit)
+        total_pages: Math.ceil(total / limit)
       }
-    });
+    }));
 
   } catch (error) {
     console.error('Get transactions error:', error);
-    return sendResponse(res, 500, false, 'Internal server error');
+    return res.status(500).json(fail('Internal server error'));
   }
 };
 
@@ -159,7 +169,7 @@ export const getTransactionDetail = async (req: AuthRequest, res: Response) => {
   try {
     const { transaction_id } = req.params;
 
-    const transaction = await prisma.transaction.findUnique({
+    const order = await prisma.orders.findUnique({
       where: { id: transaction_id },
       include: {
         user: {
@@ -169,7 +179,7 @@ export const getTransactionDetail = async (req: AuthRequest, res: Response) => {
             email: true
           }
         },
-        details: {
+        order_items: {
           include: {
             book: {
               include: {
@@ -181,35 +191,25 @@ export const getTransactionDetail = async (req: AuthRequest, res: Response) => {
       }
     });
 
-    if (!transaction) {
-      return sendResponse(res, 404, false, 'Transaction not found');
+    if (!order) {
+      return res.status(404).json(fail('Transaction not found'));
     }
 
-    return sendResponse(res, 200, true, 'Transaction details retrieved successfully', transaction);
+    return res.json(ok('Transaction details retrieved successfully', order));
 
   } catch (error) {
     console.error('Get transaction detail error:', error);
-    return sendResponse(res, 500, false, 'Internal server error');
+    return res.status(500).json(fail('Internal server error'));
   }
 };
 
 export const getTransactionStatistics = async (req: AuthRequest, res: Response) => {
   try {
-    // Total transactions & average amount
-    const transactionStats = await prisma.transaction.aggregate({
-      _count: {
-        id: true
-      },
-      _avg: {
-        totalAmount: true
-      },
-      _sum: {
-        totalAmount: true
-      }
-    });
+    // Total orders
+    const totalOrders = await prisma.orders.count();
 
-    // Get all transaction details with book and genre info
-    const transactionDetails = await prisma.transactionDetail.findMany({
+    // Get all order items with book and genre info
+    const orderItems = await prisma.order_items.findMany({
       include: {
         book: {
           include: {
@@ -219,13 +219,17 @@ export const getTransactionStatistics = async (req: AuthRequest, res: Response) 
       }
     });
 
-    // Aggregate by genre
+    // Calculate total revenue and aggregate by genre
+    let totalRevenue = 0;
     const genreStats: { [genreId: string]: { genreName: string; totalSold: number; totalRevenue: number } } = {};
 
-    transactionDetails.forEach(detail => {
-      const genreId = detail.book.genreId;
-      const genreName = detail.book.genre.name;
+    orderItems.forEach(item => {
+      const genreId = item.book.genre_id;
+      const genreName = item.book.genre.name;
+      const itemRevenue = item.quantity * item.book.price;
       
+      totalRevenue += itemRevenue;
+
       if (!genreStats[genreId]) {
         genreStats[genreId] = {
           genreName,
@@ -234,8 +238,8 @@ export const getTransactionStatistics = async (req: AuthRequest, res: Response) 
         };
       }
       
-      genreStats[genreId].totalSold += detail.quantity;
-      genreStats[genreId].totalRevenue += detail.quantity * detail.priceAtPurchase;
+      genreStats[genreId].totalSold += item.quantity;
+      genreStats[genreId].totalRevenue += itemRevenue;
     });
 
     const genreArray = Object.values(genreStats);
@@ -249,10 +253,12 @@ export const getTransactionStatistics = async (req: AuthRequest, res: Response) 
       ? genreArray.reduce((min, genre) => genre.totalSold < min.totalSold ? genre : min)
       : { genreName: "No data", totalSold: 0, totalRevenue: 0 };
 
+    const averageTransactionAmount = totalOrders > 0 ? Math.round(totalRevenue / totalOrders) : 0;
+
     const statistics = {
-      totalTransactions: transactionStats._count.id,
-      totalRevenue: transactionStats._sum.totalAmount || 0,
-      averageTransactionAmount: Math.round(transactionStats._avg.totalAmount || 0),
+      totalTransactions: totalOrders,
+      totalRevenue,
+      averageTransactionAmount,
       genreWithMostSales: {
         genreName: genreWithMostSales.genreName,
         totalSold: genreWithMostSales.totalSold,
@@ -265,10 +271,10 @@ export const getTransactionStatistics = async (req: AuthRequest, res: Response) 
       }
     };
 
-    return sendResponse(res, 200, true, 'Statistics retrieved successfully', statistics);
+    return res.json(ok('Statistics retrieved successfully', statistics));
 
   } catch (error) {
     console.error('Get statistics error:', error);
-    return sendResponse(res, 500, false, 'Internal server error');
+    return res.status(500).json(fail('Internal server error'));
   }
 };

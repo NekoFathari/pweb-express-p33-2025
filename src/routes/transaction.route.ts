@@ -5,12 +5,12 @@ import {
   getTransactionDetail,
   getTransactionStatistics
 } from '../controllers/transaction.controller';
-import { authenticate } from '../middleware/auth';
+import { authGuard } from '../middlewares/auth';
 
 const router = Router();
 
 // All routes require authentication
-router.use(authenticate);
+router.use(authGuard);
 
 router.post('/', createTransaction);
 router.get('/', getAllTransactions);
