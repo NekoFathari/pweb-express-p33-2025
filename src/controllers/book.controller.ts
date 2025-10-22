@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
+import { ok, fail } from '../utils/response';
 
 const prisma = new PrismaClient();
 
@@ -17,7 +18,7 @@ export const createBook = async (req: Request, res: Response) => {
     });
 
     if (existingBook) {
-      return res.status(400).json({ error: 'Book with this title already exists' });
+      return res.status(400).json(fail('Book with this title already exists'));
     }
 
     // Validasi genre exists
@@ -26,7 +27,7 @@ export const createBook = async (req: Request, res: Response) => {
     });
 
     if (!genre) {
-      return res.status(404).json({ error: 'Genre not found' });
+      return res.status(404).json(fail('Genre not found'));
     }
 
     const book = await prisma.books.create({
@@ -45,9 +46,9 @@ export const createBook = async (req: Request, res: Response) => {
       }
     });
 
-    res.status(201).json(book);
+    res.status(201).json(ok('Book created successfully', book));
   } catch (error) {
-    res.status(500).json({ error: 'Failed to create book' });
+    res.status(500).json(fail('Failed to create book'));
   }
 };
 
@@ -122,17 +123,17 @@ export const getBooks = async (req: Request, res: Response) => {
       }
     });
 
-    res.json({
-      data: books,
+    res.json(ok('Books retrieved successfully', {
+      books,
       pagination: {
         page: pageNum,
         limit: limitNum,
         total,
         total_pages: Math.ceil(total / limitNum)
       }
-    });
+    }));
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch books' });
+    res.status(500).json(fail('Failed to fetch books'));
   }
 };
 
@@ -152,12 +153,12 @@ export const getBookById = async (req: Request, res: Response) => {
     });
 
     if (!book) {
-      return res.status(404).json({ error: 'Book not found' });
+      return res.status(404).json(fail('Book not found'));
     }
 
-    res.json(book);
+    res.json(ok('Book retrieved successfully', book));
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch book' });
+    res.status(500).json(fail('Failed to fetch book'));
   }
 };
 
@@ -190,17 +191,17 @@ export const getBooksByGenre = async (req: Request, res: Response) => {
       }
     });
 
-    res.json({
-      data: books,
+    res.json(ok('Books by genre retrieved successfully', {
+      books,
       pagination: {
         page: pageNum,
         limit: limitNum,
         total,
         total_pages: Math.ceil(total / limitNum)
       }
-    });
+    }));
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch books by genre' });
+    res.status(500).json(fail('Failed to fetch books by genre'));
   }
 };
 
@@ -219,7 +220,7 @@ export const updateBook = async (req: Request, res: Response) => {
     });
 
     if (!existingBook) {
-      return res.status(404).json({ error: 'Book not found' });
+      return res.status(404).json(fail('Book not found'));
     }
 
     // Validasi duplikat judul jika title diupdate
@@ -233,7 +234,7 @@ export const updateBook = async (req: Request, res: Response) => {
       });
 
       if (duplicateTitle) {
-        return res.status(400).json({ error: 'Book with this title already exists' });
+        return res.status(400).json(fail('Book with this title already exists'));
       }
     }
 
@@ -244,7 +245,7 @@ export const updateBook = async (req: Request, res: Response) => {
       });
 
       if (!genre) {
-        return res.status(404).json({ error: 'Genre not found' });
+        return res.status(404).json(fail('Genre not found'));
       }
     }
 
@@ -256,9 +257,9 @@ export const updateBook = async (req: Request, res: Response) => {
       }
     });
 
-    res.json(updatedBook);
+    res.json(ok('Book updated successfully', updatedBook));
   } catch (error) {
-    res.status(500).json({ error: 'Failed to update book' });
+    res.status(500).json(fail('Failed to update book'));
   }
 };
 
@@ -275,7 +276,7 @@ export const deleteBook = async (req: Request, res: Response) => {
     });
 
     if (!book) {
-      return res.status(404).json({ error: 'Book not found' });
+      return res.status(404).json(fail('Book not found'));
     }
 
     // Soft delete
@@ -286,8 +287,8 @@ export const deleteBook = async (req: Request, res: Response) => {
       }
     });
 
-    res.json({ message: 'Book deleted successfully' });
+    res.json(ok('Book deleted successfully', { id: book_id }));
   } catch (error) {
-    res.status(500).json({ error: 'Failed to delete book' });
+    res.status(500).json(fail('Failed to delete book'));
   }
 };
