@@ -12,7 +12,7 @@ interface AuthRequest extends Request {
 const prisma = new PrismaClient();
 
 interface TransactionItem {
-  bookId: string;
+  book_id: string;
   quantity: number;
 }
 
@@ -26,9 +26,15 @@ export const createTransaction = async (req: AuthRequest, res: Response) => {
       return res.status(400).json(fail('Items are required and must be a non-empty array'));
     }
 
-    for (const item of items) {
-      if (!item.bookId || !item.quantity || item.quantity < 1) {
-        return res.status(400).json(fail('Each item must have valid bookId and quantity (min 1)'));
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+
+      if (!item.book_id || typeof item.book_id !== 'string' || item.book_id.trim() === '') {
+        return res.status(400).json(fail(`Invalid book_id for item at index ${i}`));
+      }
+
+      if (typeof item.quantity !== 'number' || !Number.isFinite(item.quantity) || item.quantity < 1) {
+        return res.status(400).json(fail(`Invalid quantity for item at index ${i} (must be a number >= 1)`));
       }
     }
 
@@ -39,14 +45,14 @@ export const createTransaction = async (req: AuthRequest, res: Response) => {
       for (const item of items) {
         const book = await tx.books.findFirst({
           where: { 
-            id: item.bookId,
+            id: item.book_id,
             deleted_at: null
           },
           include: { genre: true }
         });
 
         if (!book) {
-          throw new Error(`BOOK_NOT_FOUND:${item.bookId}`);
+          throw new Error(`BOOK_NOT_FOUND:${item.book_id}`);
         }
 
         if (book.stock_quantity < item.quantity) {
@@ -55,12 +61,12 @@ export const createTransaction = async (req: AuthRequest, res: Response) => {
 
         // Update stock
         await tx.books.update({
-          where: { id: item.bookId },
+          where: { id: item.book_id },
           data: { stock_quantity: { decrement: item.quantity } }
         });
 
         orderItems.push({
-          book_id: item.bookId,
+          book_id: item.book_id,
           quantity: item.quantity
         });
       }
@@ -86,7 +92,7 @@ export const createTransaction = async (req: AuthRequest, res: Response) => {
           user: {
             select: {
               id: true,
-              name: true,
+              username: true,
               email: true
             }
           }
@@ -128,7 +134,7 @@ export const getAllTransactions = async (req: AuthRequest, res: Response) => {
         user: {
           select: {
             id: true,
-            name: true,
+            username: true,
             email: true
           }
         },
@@ -175,7 +181,7 @@ export const getTransactionDetail = async (req: AuthRequest, res: Response) => {
         user: {
           select: {
             id: true,
-            name: true,
+            username: true,
             email: true
           }
         },
