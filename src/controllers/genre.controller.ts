@@ -29,8 +29,14 @@ export async function detail(req: Request, res: Response) {
 export async function update(req: Request, res: Response) {
   const parsed = UpdateDto.safeParse(req.body);
   if (!parsed.success) return res.status(400).json(fail('Invalid body'));
-  const data = await svc.update(req.params.id, parsed.data);
-  res.json(ok('Genre updated', data));
+  try {
+    const data = await svc.update(req.params.id, parsed.data);
+    res.json(ok('Genre updated', data));
+  } catch (e: any) {
+    if (e.code === 'DUPLICATE_GENRE')
+      return res.status(400).json(fail('Genre name already exists'));
+    throw e; // biar error lain tetap jalan
+  }
 }
 export async function remove(req: Request, res: Response) {
   await svc.softDelete(req.params.id);
