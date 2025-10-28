@@ -33,20 +33,26 @@ export const createTransaction = async (req: AuthRequest, res: Response) => {
         return res.status(400).json(fail(`Invalid book_id for item at index ${i}`));
       }
 
+      // Quantity tidak boleh float
+      if (!Number.isInteger(item.quantity)) {
+        return res.status(422).json(fail(`Quantity must be integer (not float) for item at index ${i}`));
+      }
+
+      // Quantity tidak boleh negatif
       if (typeof item.quantity !== 'number' || !Number.isFinite(item.quantity) || item.quantity < 1) {
-        return res.status(400).json(fail(`Invalid quantity for item at index ${i} (must be a number >= 1)`));
+        return res.status(422).json(fail(`Invalid quantity for item at index ${i} (must be integer >= 1)`));
       }
     }
 
-    // Database transaction
+    // Database transaction - FIXED untuk schema yang benar
     const result = await prisma.$transaction(async (tx) => {
-      const orderItems = [];
+      let totalAmount = 0;
+      const transactionDetails = [];
 
       for (const item of items) {
-        const book = await tx.books.findFirst({
+        const book = await tx.book.findUnique({
           where: { 
-            id: item.book_id,
-            deleted_at: null
+            id: item.book_id
           },
           include: { genre: true }
         });
@@ -55,32 +61,37 @@ export const createTransaction = async (req: AuthRequest, res: Response) => {
           throw new Error(`BOOK_NOT_FOUND:${item.book_id}`);
         }
 
-        if (book.stock_quantity < item.quantity) {
-          throw new Error(`INSUFFICIENT_STOCK:${book.title}:${book.stock_quantity}:${item.quantity}`);
+        if (book.stock < item.quantity) {
+          throw new Error(`INSUFFICIENT_STOCK:${book.title}:${book.stock}:${item.quantity}`);
         }
 
-        // Update stock
-        await tx.books.update({
+        // Update stock - FIXED field name
+        await tx.book.update({
           where: { id: item.book_id },
-          data: { stock_quantity: { decrement: item.quantity } }
+          data: { stock: { decrement: item.quantity } }
         });
 
-        orderItems.push({
-          book_id: item.book_id,
-          quantity: item.quantity
+        const itemTotal = book.price * item.quantity;
+        totalAmount += itemTotal;
+
+        transactionDetails.push({
+          bookId: item.book_id, // FIXED field mapping
+          quantity: item.quantity,
+          priceAtPurchase: book.price // Price snapshot
         });
       }
 
-      // Create order
-      const order = await tx.orders.create({
+      // Create transaction - FIXED untuk schema Transaction
+      const transaction = await tx.transaction.create({
         data: {
-          user_id: userId,
-          order_items: {
-            create: orderItems
+          userId: userId,
+          totalAmount: totalAmount, // Total amount calculation
+          details: {
+            create: transactionDetails
           }
         },
         include: {
-          order_items: {
+          details: {
             include: {
               book: {
                 include: {
@@ -92,14 +103,14 @@ export const createTransaction = async (req: AuthRequest, res: Response) => {
           user: {
             select: {
               id: true,
-              username: true,
+              name: true, // FIXED: field name dari schema
               email: true
             }
           }
         }
       });
 
-      return order;
+      return transaction;
     });
 
     return res.status(201).json(ok('Transaction created successfully', result));
@@ -123,22 +134,45 @@ export const createTransaction = async (req: AuthRequest, res: Response) => {
 
 export const getAllTransactions = async (req: AuthRequest, res: Response) => {
   try {
+    // Support semua params
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 10;
     const skip = (page - 1) * limit;
+    
+    // Filter by user_id
+    const userId = req.query.user_id as string;
+    
+    // Sort options
+    const sortBy = req.query.sortBy as string || 'createdAt';
+    const sortOrder = req.query.sortOrder as string || 'desc';
 
-    const orders = await prisma.orders.findMany({
+    // Build where condition
+    const where: any = {};
+    if (userId) {
+      where.userId = userId;
+    }
+
+    // Validate sort fields
+    const validSortFields = ['createdAt', 'totalAmount'];
+    const validSortOrders = ['asc', 'desc'];
+    
+    const finalSortBy = validSortFields.includes(sortBy) ? sortBy : 'createdAt';
+    const finalSortOrder = validSortOrders.includes(sortOrder) ? sortOrder : 'desc';
+
+    // FIXED: Gunakan Transaction bukan Orders
+    const transactions = await prisma.transaction.findMany({
+      where,
       skip,
       take: limit,
       include: {
         user: {
           select: {
             id: true,
-            username: true,
+            name: true, // FIXED: field name
             email: true
           }
         },
-        order_items: {
+        details: {
           include: {
             book: {
               include: {
@@ -149,19 +183,24 @@ export const getAllTransactions = async (req: AuthRequest, res: Response) => {
         }
       },
       orderBy: {
-        created_at: 'desc'
+        [finalSortBy]: finalSortOrder
       }
     });
 
-    const total = await prisma.orders.count();
+    const total = await prisma.transaction.count({ where });
 
     return res.json(ok('Transactions retrieved successfully', {
-      orders,
+      transactions, // FIXED: return transactions bukan orders
       pagination: {
         page,
         limit,
         total,
-        total_pages: Math.ceil(total / limit)
+        total_pages: Math.ceil(total / limit),
+        sort_by: finalSortBy,
+        sort_order: finalSortOrder,
+        filters: {
+          user_id: userId || 'all'
+        }
       }
     }));
 
@@ -175,17 +214,18 @@ export const getTransactionDetail = async (req: AuthRequest, res: Response) => {
   try {
     const { transaction_id } = req.params;
 
-    const order = await prisma.orders.findUnique({
+    // FIXED: Gunakan Transaction bukan Orders
+    const transaction = await prisma.transaction.findUnique({
       where: { id: transaction_id },
       include: {
         user: {
           select: {
             id: true,
-            username: true,
+            name: true, // FIXED: field name
             email: true
           }
         },
-        order_items: {
+        details: {
           include: {
             book: {
               include: {
@@ -197,11 +237,11 @@ export const getTransactionDetail = async (req: AuthRequest, res: Response) => {
       }
     });
 
-    if (!order) {
+    if (!transaction) {
       return res.status(404).json(fail('Transaction not found'));
     }
 
-    return res.json(ok('Transaction details retrieved successfully', order));
+    return res.json(ok('Transaction details retrieved successfully', transaction));
 
   } catch (error) {
     console.error('Get transaction detail error:', error);
@@ -211,11 +251,47 @@ export const getTransactionDetail = async (req: AuthRequest, res: Response) => {
 
 export const getTransactionStatistics = async (req: AuthRequest, res: Response) => {
   try {
-    // Total orders
-    const totalOrders = await prisma.orders.count();
+    // ✅ ADDED: Date range filter (optional)
+    const startDate = req.query.startDate as string;
+    const endDate = req.query.endDate as string;
+    
+    let dateFilter = {};
+    if (startDate || endDate) {
+      dateFilter = {
+        createdAt: {
+          ...(startDate && { gte: new Date(startDate) }),
+          ...(endDate && { lte: new Date(endDate) })
+        }
+      };
+      
+      // Validate dates
+      if (startDate && isNaN(new Date(startDate).getTime())) {
+        return res.status(400).json(fail('Invalid startDate format'));
+      }
+      if (endDate && isNaN(new Date(endDate).getTime())) {
+        return res.status(400).json(fail('Invalid endDate format'));
+      }
+    }
 
-    // Get all order items with book and genre info
-    const orderItems = await prisma.order_items.findMany({
+    // Total transactions - FIXED: Gunakan Transaction
+    const transactionStats = await prisma.transaction.aggregate({
+      where: dateFilter,
+      _count: {
+        id: true
+      },
+      _avg: {
+        totalAmount: true
+      },
+      _sum: {
+        totalAmount: true
+      }
+    });
+
+    // Get all transaction details - FIXED: Gunakan TransactionDetail
+    const transactionDetails = await prisma.transactionDetail.findMany({
+      where: {
+        transaction: dateFilter
+      },
       include: {
         book: {
           include: {
@@ -229,10 +305,10 @@ export const getTransactionStatistics = async (req: AuthRequest, res: Response) 
     let totalRevenue = 0;
     const genreStats: { [genreId: string]: { genreName: string; totalSold: number; totalRevenue: number } } = {};
 
-    orderItems.forEach(item => {
-      const genreId = item.book.genre_id;
-      const genreName = item.book.genre.name;
-      const itemRevenue = item.quantity * item.book.price;
+    transactionDetails.forEach(detail => {
+      const genreId = detail.book.genreId;
+      const genreName = detail.book.genre.name;
+      const itemRevenue = detail.quantity * detail.priceAtPurchase; // FIXED: Use priceAtPurchase
       
       totalRevenue += itemRevenue;
 
@@ -244,7 +320,7 @@ export const getTransactionStatistics = async (req: AuthRequest, res: Response) 
         };
       }
       
-      genreStats[genreId].totalSold += item.quantity;
+      genreStats[genreId].totalSold += detail.quantity;
       genreStats[genreId].totalRevenue += itemRevenue;
     });
 
@@ -259,12 +335,10 @@ export const getTransactionStatistics = async (req: AuthRequest, res: Response) 
       ? genreArray.reduce((min, genre) => genre.totalSold < min.totalSold ? genre : min)
       : { genreName: "No data", totalSold: 0, totalRevenue: 0 };
 
-    const averageTransactionAmount = totalOrders > 0 ? Math.round(totalRevenue / totalOrders) : 0;
-
     const statistics = {
-      totalTransactions: totalOrders,
-      totalRevenue,
-      averageTransactionAmount,
+      totalTransactions: transactionStats._count.id,
+      totalRevenue: transactionStats._sum.totalAmount || 0, // Use aggregated total
+      averageTransactionAmount: Math.round(transactionStats._avg.totalAmount || 0),
       genreWithMostSales: {
         genreName: genreWithMostSales.genreName,
         totalSold: genreWithMostSales.totalSold,
