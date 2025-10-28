@@ -81,7 +81,7 @@ export const createTransaction = async (req: AuthRequest, res: Response) => {
         });
       }
 
-      // Create transaction - FIXED untuk schema Transaction
+      // schema
       const transaction = await tx.transaction.create({
         data: {
           userId: userId,
