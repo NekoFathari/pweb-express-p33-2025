@@ -9,6 +9,27 @@ export const createBook = async (req: Request, res: Response) => {
   try {
     const { title, writer, publisher, publication_year, description, price, stock_quantity, genre_id } = req.body;
 
+    // Validasi publication_year tidak boleh lebih dari tahun sekarang
+    const currentYear = new Date().getFullYear();
+    if (publication_year > currentYear) {
+      return res.status(422).json(fail(`Publication year cannot be greater than ${currentYear}`));
+    }
+
+    // Validasi price tidak boleh negatif
+    if (price < 0) {
+      return res.status(422).json(fail('Price cannot be negative'));
+    }
+
+    // Validasi stock_quantity harus integer
+    if (!Number.isInteger(stock_quantity)) {
+      return res.status(422).json(fail('Stock quantity must be an integer'));
+    }
+
+    // Validasi stock_quantity tidak boleh negatif
+    if (stock_quantity < 0) {
+      return res.status(422).json(fail('Stock quantity cannot be negative'));
+    }
+
     // Validasi duplikat judul
     const existingBook = await prisma.books.findFirst({
       where: {
@@ -58,16 +79,9 @@ export const getBooks = async (req: Request, res: Response) => {
     const {
       page = '1',
       limit = '10',
-      title,
-      writer,
-      publisher,
-      genre_id,
-      min_price,
-      max_price,
-      min_year,
-      max_year,
-      sort_by = 'created_at',
-      order = 'desc'
+      search,
+      orderByTitle,
+      orderByPublishDate
     } = req.query;
 
     const pageNum = parseInt(page as string);
@@ -79,32 +93,29 @@ export const getBooks = async (req: Request, res: Response) => {
       deleted_at: null
     };
 
-    if (title) {
-      where.title = { contains: title as string, mode: 'insensitive' };
+    // Search filter (berlaku untuk title, writer, publisher)
+    if (search) {
+      where.OR = [
+        { title: { contains: search as string, mode: 'insensitive' } },
+        { writer: { contains: search as string, mode: 'insensitive' } },
+        { publisher: { contains: search as string, mode: 'insensitive' } }
+      ];
     }
 
-    if (writer) {
-      where.writer = { contains: writer as string, mode: 'insensitive' };
+    // Build orderBy
+    const orderBy: any[] = [];
+    
+    if (orderByTitle) {
+      orderBy.push({ title: orderByTitle === 'asc' ? 'asc' : 'desc' });
+    }
+    
+    if (orderByPublishDate) {
+      orderBy.push({ publication_year: orderByPublishDate === 'asc' ? 'asc' : 'desc' });
     }
 
-    if (publisher) {
-      where.publisher = { contains: publisher as string, mode: 'insensitive' };
-    }
-
-    if (genre_id) {
-      where.genre_id = genre_id as string;
-    }
-
-    if (min_price || max_price) {
-      where.price = {};
-      if (min_price) where.price.gte = parseFloat(min_price as string);
-      if (max_price) where.price.lte = parseFloat(max_price as string);
-    }
-
-    if (min_year || max_year) {
-      where.publication_year = {};
-      if (min_year) where.publication_year.gte = parseInt(min_year as string);
-      if (max_year) where.publication_year.lte = parseInt(max_year as string);
+    // Default order by created_at if no order specified
+    if (orderBy.length === 0) {
+      orderBy.push({ created_at: 'desc' });
     }
 
     // Get total count
@@ -118,9 +129,7 @@ export const getBooks = async (req: Request, res: Response) => {
       },
       skip,
       take: limitNum,
-      orderBy: {
-        [sort_by as string]: order as 'asc' | 'desc'
-      }
+      orderBy
     });
 
     res.json(ok('Books retrieved successfully', {
@@ -166,16 +175,55 @@ export const getBookById = async (req: Request, res: Response) => {
 export const getBooksByGenre = async (req: Request, res: Response) => {
   try {
     const { genre_id } = req.params;
-    const { page = '1', limit = '10' } = req.query;
+    const { 
+      page = '1', 
+      limit = '10',
+      search,
+      orderByTitle,
+      orderByPublishDate
+    } = req.query;
+
+    // Validasi genre exists
+    const genre = await prisma.genres.findUnique({
+      where: { id: genre_id }
+    });
+
+    if (!genre) {
+      return res.status(404).json(fail('Genre not found'));
+    }
 
     const pageNum = parseInt(page as string);
     const limitNum = parseInt(limit as string);
     const skip = (pageNum - 1) * limitNum;
 
-    const where = {
+    const where: any = {
       genre_id,
       deleted_at: null
     };
+
+    // Search filter
+    if (search) {
+      where.OR = [
+        { title: { contains: search as string, mode: 'insensitive' } },
+        { writer: { contains: search as string, mode: 'insensitive' } },
+        { publisher: { contains: search as string, mode: 'insensitive' } }
+      ];
+    }
+
+    // Build orderBy
+    const orderBy: any[] = [];
+    
+    if (orderByTitle) {
+      orderBy.push({ title: orderByTitle === 'asc' ? 'asc' : 'desc' });
+    }
+    
+    if (orderByPublishDate) {
+      orderBy.push({ publication_year: orderByPublishDate === 'asc' ? 'asc' : 'desc' });
+    }
+
+    if (orderBy.length === 0) {
+      orderBy.push({ created_at: 'desc' });
+    }
 
     const total = await prisma.books.count({ where });
 
@@ -186,9 +234,7 @@ export const getBooksByGenre = async (req: Request, res: Response) => {
       },
       skip,
       take: limitNum,
-      orderBy: {
-        created_at: 'desc'
-      }
+      orderBy
     });
 
     res.json(ok('Books by genre retrieved successfully', {
@@ -221,6 +267,29 @@ export const updateBook = async (req: Request, res: Response) => {
 
     if (!existingBook) {
       return res.status(404).json(fail('Book not found'));
+    }
+
+    // Validasi publication_year jika diupdate
+    if (updateData.publication_year !== undefined) {
+      const currentYear = new Date().getFullYear();
+      if (updateData.publication_year > currentYear) {
+        return res.status(422).json(fail(`Publication year cannot be greater than ${currentYear}`));
+      }
+    }
+
+    // Validasi price jika diupdate
+    if (updateData.price !== undefined && updateData.price < 0) {
+      return res.status(422).json(fail('Price cannot be negative'));
+    }
+
+    // Validasi stock_quantity jika diupdate
+    if (updateData.stock_quantity !== undefined) {
+      if (!Number.isInteger(updateData.stock_quantity)) {
+        return res.status(422).json(fail('Stock quantity must be an integer'));
+      }
+      if (updateData.stock_quantity < 0) {
+        return res.status(422).json(fail('Stock quantity cannot be negative'));
+      }
     }
 
     // Validasi duplikat judul jika title diupdate

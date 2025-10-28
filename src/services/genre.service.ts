@@ -29,4 +29,9 @@ export async function softDelete(id: string) {
 
   return prisma.genres.update({ where: { id }, data: { deleted_at: new Date() } });
 }
+export async function findByName(name: string) {
+  return prisma.genres.findFirst({
+    where: { name, deleted_at: null }
+  });
+}
 
